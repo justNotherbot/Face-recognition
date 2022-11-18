@@ -23,7 +23,7 @@ enum Eye_prop
 	max_def_y = 70,
 	eye_def_max = 20,
 	wait_time_milis = 34,
-	step = 94
+	step = 35
 };
 enum Eye_blink 
 {
@@ -98,7 +98,8 @@ void drawEyes()
 			blink = true;
 			blink_time = blink_tmp;
 			blink_duration = ((rand() % 50) + 20) * 100;
-		}//Draw everything
+		}
+		//Draw everything
 		eye_def.x = eye_def.x + step * 0.0001 * (tgt.x - eye_def.x);
 		eye_def.y = eye_def.y + step * 0.0001 * (tgt.y - eye_def.y);
 		int tmp_r = eye_socket_radius * 0.01 * c_width;
@@ -179,13 +180,6 @@ int main()
 {
 	CascadeClassifier cascade;
 	//Loading data for ai detection
-	Mat base = imread("base.png", 0);
-	if (base.empty())
-	{
-		cout << "Imread error" << "\n";
-		return 3;
-	}
-	resize(base, base, Size(), 0.5, 0.5, INTER_AREA);
 	cascade.load("C:/opencv/sources/data/haarcascades/haarcascade_frontalface_alt.xml");
 	vector<Rect> faces;
 	VideoCapture cap(0);
