@@ -4,6 +4,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/objdetect.hpp>
 #include <SFML/Graphics.hpp>
+#include <SFML/Window/Keyboard.hpp>
 #include <iostream>
 #include <math.h>
 #include <chrono>
@@ -14,25 +15,25 @@
 //Constants
 
 enum Screen { width = 1918, height = 775 };
-enum Eye_prop 
+enum Eye_prop
 {
 	eye_sep = 20,
-	eye_radius = 9,
+	eye_radius = 6,
 	eye_socket_radius = 13,
-	max_def_x = 70,
-	max_def_y = 70,
 	eye_def_max = 20,
-	wait_time_milis = 34,
-	step = 35
+	wait_time_milis = 150,
+	step = 29
 };
 enum Eye_blink 
 {
 	blink_tgt = 500,
-	blink_delta = 17,
-	blink_offset = 100
+	blink_delta = 77,
+	blink_offset = 100,
+	f_time_avg = 800
 };
 
 typedef std::chrono::milliseconds milis;
+typedef std::chrono::nanoseconds nanos;
 
 using namespace cv;
 using namespace std;
@@ -42,8 +43,12 @@ sf::Vector2f avg = { 0, 0 };
 sf::Vector2f head_past = { 0, 0 }; //Past eye position. Needed to decrease jitter
 sf::Vector2f tgt = { 0, 0 };
 sf::Vector2f matsz = { 640, 480 };
+int n_faces_past = 0;
+bool forced_center = false;
+bool pos_inc = false;
+bool flipimg = false;
 bool draw = true;
-float frame_time = 0;
+bool drawing_thread_quit = false;
 
 void drawEyes()
 {
@@ -57,14 +62,36 @@ void drawEyes()
 	auto blink_time = chrono::high_resolution_clock::now();
 	sf::Vector2f eye_def = { 0, 0 };
 	bool blink = false;
-	bool backwards = false;
+	bool blink_backwards = false;
 	int blink_duration = 2000;
-	float rect_current = 0;
+	float blink_current = 0;
+	int r_key_past = 0;
 	while (draw && window.isOpen())
 	{
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::Escape))
+		{
+			drawing_thread_quit = true;
+			break;
+		}
+		if (sf::Keyboard::isKeyPressed(sf::Keyboard::R))
+		{
+			if (!r_key_past)
+			{
+				flipimg = 1 - flipimg;
+			}
+			r_key_past = 1;
+		}
+		else
+		{
+			r_key_past = 0;
+		}
+		auto rec_begin = chrono::high_resolution_clock::now();
 		sf::Vector2u w_size = window.getSize();
 		int c_width = w_size.x;
 		int c_height = w_size.y;
+		int tmp_r = eye_socket_radius * 0.01 * c_width;
+		int tmp_r1 = eye_radius * 0.01 * c_width;
+		int max_def = 70;
 		float delta = sqrtf(pow(avg.x - head_past.x, 2) + pow(avg.y - head_past.y, 2));
 		//Only track movement above a threshold to reduce jitter
 		if (delta > eye_def_max)
@@ -86,8 +113,8 @@ void drawEyes()
 				int avg_conv_x = avg.x * scale_fx;
 				int avg_conv_y = avg.y * scale_fy;
 				//Convert head position to eye deflection
-				tgt.x = ((c_width / 2) - avg_conv_x) * (2 * float(max_def_x) / float(c_width));
-				tgt.y = (avg_conv_y - (c_height / 2)) * (2 * float(max_def_y) / float(c_height));
+				tgt.x = ((c_width / 2) - avg_conv_x) * (2 * float(max_def) / float(c_width));
+				tgt.y = (avg_conv_y - (c_height / 2)) * (2 * float(max_def) / float(c_height));
 			}
 		}
 		auto blink_tmp = chrono::high_resolution_clock::now();
@@ -99,11 +126,19 @@ void drawEyes()
 			blink_time = blink_tmp;
 			blink_duration = ((rand() % 50) + 20) * 100;
 		}
+		auto rec_end = chrono::high_resolution_clock::now();
+		std::chrono::duration<float> f_tmp = rec_end - rec_begin;
+		nanos f_time = std::chrono::duration_cast<nanos>(f_tmp);
+		float time_factor = f_time.count() / float(f_time_avg);
+		float res_factor = float(c_height) / 775;
 		//Draw everything
-		eye_def.x = eye_def.x + step * 0.0001 * (tgt.x - eye_def.x);
-		eye_def.y = eye_def.y + step * 0.0001 * (tgt.y - eye_def.y);
-		int tmp_r = eye_socket_radius * 0.01 * c_width;
-		int tmp_r1 = eye_radius * 0.01 * c_width;
+		float curr_step = step;
+		if (forced_center)
+		{
+			curr_step *= 0.3;
+		}
+		eye_def.x = eye_def.x + curr_step * 0.0001 * (tgt.x - eye_def.x) * time_factor * res_factor;
+		eye_def.y = eye_def.y + curr_step * 0.0001 * (tgt.y - eye_def.y) * time_factor * res_factor;
 		int socket_x = eye_sep * 0.01 * c_width;
 		sf::CircleShape socket1(tmp_r);
 		sf::CircleShape socket2(tmp_r);
@@ -127,32 +162,39 @@ void drawEyes()
 		window.draw(eye2);
 		if (blink)
 		{
-			float rect_step = 0;
-			sf::RectangleShape tmp_rect(sf::Vector2f(socket_x + tmp_r * 4 + eye_sep, rect_current));
+			//Draw eye lids
+			float upper_step = 0;
+			float lower_step = 0;
+			sf::RectangleShape tmp_rect(sf::Vector2f(socket_x + tmp_r * 4 + eye_sep, blink_current));
+			sf::RectangleShape tmp_rect1(sf::Vector2f(socket_x + tmp_r * 4 + eye_sep, blink_current * 0.55));
 			tmp_rect.setPosition((c_width / 2) - socket_x - tmp_r, c_height / 2 - tmp_r);
 			tmp_rect.setFillColor(sf::Color(0, 0, 0));
+			tmp_rect1.setPosition((c_width / 2) + socket_x + tmp_r, c_height / 2 + tmp_r);
+			tmp_rect1.setFillColor(sf::Color(0, 0, 0));
+			tmp_rect1.rotate(180);
 			window.draw(tmp_rect);
-			if (rect_current >= tmp_r * 2 + blink_offset)
+			window.draw(tmp_rect1);
+			if (blink_current >= tmp_r * 1.1 + blink_offset)
 			{
-				backwards = true;
+				blink_backwards = true;
 			}
-			if (backwards)
+			if (blink_backwards)
 			{
-				rect_step = -c_height * 0.00001 * blink_delta;
+				upper_step = -c_height * 0.00001 * blink_delta;
 			}
 			else
 			{
-				rect_step = c_height * 0.00001 * blink_delta;
+				upper_step = c_height * 0.00001 * blink_delta;
 			}
-			if (rect_current <= 0 && backwards)
+			if (blink_current <= 0 && blink_backwards)
 			{
 				blink = false;
-				backwards = false;
-				rect_current = 0;
+				blink_backwards = false;
+				blink_current = 0;
 			}
 			else
 			{
-				rect_current += rect_step;
+				blink_current += upper_step * time_factor * res_factor;
 			}
 		}
 		sf::Event event;
@@ -180,22 +222,32 @@ int main()
 {
 	CascadeClassifier cascade;
 	//Loading data for ai detection
-	cascade.load("C:/opencv/sources/data/haarcascades/haarcascade_frontalface_alt.xml");
+	cascade.load("haarcascade_frontalface_alt.xml");
 	vector<Rect> faces;
-	VideoCapture cap(0);
+	VideoCapture cap(1);
 	if (cap.isOpened())
 	{
 		thread eye_thread(drawEyes);
+		auto center_time = chrono::high_resolution_clock::now();
 		while (1)
 		{
 			Mat frame;
 			sf::Vector2f tmp = { 0, 0 };
 			bool check = cap.read(frame);
+			Size f_size = frame.size();
 			GaussianBlur(frame, frame, Size(5, 5), 0);
 			if (!check)
 			{
 				cout << "Capture failed";
 				break;
+			}
+			if (flipimg)
+			{
+				Mat mat_rot1;
+				Mat mat_rot2;
+				flip(frame, mat_rot1, 0);
+				flip(mat_rot1, mat_rot2, 1);
+				mat_rot2.copyTo(frame);
 			}
 			cascade.detectMultiScale(frame, faces, 1.7, 1.9, CASCADE_SCALE_IMAGE, Size(50, 50));
 			for (int i = 0; i < faces.size(); i++) //Calculate average position of faces
@@ -207,16 +259,44 @@ int main()
 			}
 			if (faces.size())
 			{
+				forced_center = false;
+				pos_inc = false;
+				center_time = chrono::high_resolution_clock::now();
 				tmp.x /= faces.size();
 				tmp.y /= faces.size();
 				circle(frame, Point(tmp.x, tmp.y), eye_radius, Scalar(0, 0, 0), 7);
 				avg = tmp;
 			}
+			if (n_faces_past > 0 && faces.size() == 0)
+			{
+				forced_center = true;
+				center_time = chrono::high_resolution_clock::now();
+			}
+			n_faces_past = faces.size();
+			auto curr_time = chrono::high_resolution_clock::now();
+			std::chrono::duration<float> f_tmp = curr_time - center_time;
+			milis c_dur = std::chrono::duration_cast<milis>(f_tmp);
+			cout << c_dur.count() << "\n";
+			if (c_dur.count() > 5000)
+			{
+				avg.x = f_size.width / 2;
+				avg.y = f_size.height / 2;
+				pos_inc = false;
+			}
+			else if (c_dur.count() < 5000 && c_dur.count() > 500)
+			{
+				if (!pos_inc)
+				{
+					avg.x = (f_size.width / 2) - (avg.x - f_size.width / 2) * 1.2;
+					avg.y = (f_size.height / 2) + (avg.y - f_size.height / 2) * 1.2;
+					pos_inc = true;
+				}
+			}
 			//Display everything
 			imshow("Actual", frame);
 			matsz.x = frame.size().width;
 			matsz.y = frame.size().height;
-			if (waitKey(1) == 27)
+			if (waitKey(1) == 27 or drawing_thread_quit)
 			{
 				draw = false;
 				eye_thread.join();
