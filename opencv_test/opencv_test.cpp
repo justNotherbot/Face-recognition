@@ -6,6 +6,7 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Window/Keyboard.hpp>
 #include <iostream>
+#include <fstream>
 #include <math.h>
 #include <chrono>
 #include <stdlib.h>
@@ -39,10 +40,10 @@ using namespace cv;
 using namespace std;
 
 //Globals
-sf::Vector2f avg = { 0, 0 };
+sf::Vector2f matsz = { 640, 480 };
+sf::Vector2f avg = { matsz.x / 2, matsz.y / 2 };
 sf::Vector2f head_past = { 0, 0 }; //Past eye position. Needed to decrease jitter
 sf::Vector2f tgt = { 0, 0 };
-sf::Vector2f matsz = { 640, 480 };
 int n_faces_past = 0;
 bool forced_center = false;
 bool pos_inc = false;
@@ -54,8 +55,6 @@ void drawEyes()
 {
 	//Setting up the window
 	sf::RenderWindow window;
-	window.setFramerateLimit(35);
-	window.setVerticalSyncEnabled(true);
 	window.create(sf::VideoMode(width, height), "Output");
 	//Time points for blinking
 	auto t1 = chrono::high_resolution_clock::now();
@@ -224,7 +223,7 @@ int main()
 	//Loading data for ai detection
 	cascade.load("haarcascade_frontalface_alt.xml");
 	vector<Rect> faces;
-	VideoCapture cap(1);
+	VideoCapture cap(0);
 	if (cap.isOpened())
 	{
 		thread eye_thread(drawEyes);
@@ -267,6 +266,7 @@ int main()
 				circle(frame, Point(tmp.x, tmp.y), eye_radius, Scalar(0, 0, 0), 7);
 				avg = tmp;
 			}
+			//Time countdown for position increment when face contact has been lost
 			if (n_faces_past > 0 && faces.size() == 0)
 			{
 				forced_center = true;
@@ -276,19 +276,18 @@ int main()
 			auto curr_time = chrono::high_resolution_clock::now();
 			std::chrono::duration<float> f_tmp = curr_time - center_time;
 			milis c_dur = std::chrono::duration_cast<milis>(f_tmp);
-			cout << c_dur.count() << "\n";
 			if (c_dur.count() > 5000)
 			{
 				avg.x = f_size.width / 2;
 				avg.y = f_size.height / 2;
 				pos_inc = false;
 			}
-			else if (c_dur.count() < 5000 && c_dur.count() > 500)
+			else if (c_dur.count() < 5000 && c_dur.count() > 2000)
 			{
 				if (!pos_inc)
 				{
-					avg.x = (f_size.width / 2) - (avg.x - f_size.width / 2) * 1.2;
-					avg.y = (f_size.height / 2) + (avg.y - f_size.height / 2) * 1.2;
+					avg.x = (f_size.width / 2) + (avg.x - f_size.width / 2) * 1.3;
+					avg.y = (f_size.height / 2) + (avg.y - f_size.height / 2) * 1.3;
 					pos_inc = true;
 				}
 			}
